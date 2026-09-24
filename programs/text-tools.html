@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Text Tools</title>
+<style>
+:root{--bg:#0e0f13;--panel:#161820;--ink:#e8e6e3;--muted:#8a8f9c;--line:#2a2d3a;--accent:#f0b35a;--bad:#ff7a6b}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 16px}
+h1{font-size:18px;letter-spacing:.06em;margin:0 0 4px;font-weight:650}
+h1 span{color:var(--accent)}
+.sub{color:var(--muted);font-size:12px;margin:0 0 18px}
+.panes{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:760px){.panes{grid-template-columns:1fr}}
+.pane{display:flex;flex-direction:column;gap:6px}
+.pane header{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px}
+textarea{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;min-height:260px;resize:vertical;width:100%}
+textarea:focus{outline:none;border-color:#4a5066}
+.stats{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.groups{margin-top:18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.group{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.group h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:600}
+.btns{display:flex;flex-wrap:wrap;gap:6px}
+button{font:inherit;font-size:12.5px;color:var(--ink);background:#1e212b;border:1px solid var(--line);border-radius:6px;padding:5px 9px;cursor:pointer}
+button:hover{border-color:#4a5066}
+button:active{border-color:var(--accent)}
+.small{padding:2px 8px;font-size:11.5px}
+#err{color:var(--bad);font-size:12px;min-height:1.2em}
+#hashes{margin-top:8px;font:12px/1.6 ui-monospace,Consolas,monospace;word-break:break-all;color:var(--muted)}
+#hashes b{color:var(--ink);font-weight:600}
+input[type=text]{font:inherit;font-size:12.5px;background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 8px;width:100%;margin-bottom:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>TEXT<span>TOOLS</span></h1>
+  <p class="sub">Paste text on the left, click a tool, and the result appears on the right. Everything happens inside this page and nothing is sent anywhere.</p>
+  <div class="panes">
+    <div class="pane">
+      <header><span>Input</span><span><button class="small" id="clearIn">Clear</button> <button class="small" id="paste">Paste</button></span></header>
+      <textarea id="in" spellcheck="false" placeholder="Type or paste something…"></textarea>
+      <div class="stats" id="statsIn"></div>
+    </div>
+    <div class="pane">
+      <header><span>Output</span><span><button class="small" id="swap">↰ Use as input</button> <button class="small" id="copy">Copy</button></span></header>
+      <textarea id="out" spellcheck="false" readonly></textarea>
+      <div class="stats" id="statsOut"></div>
+    </div>
+  </div>
+  <div id="err"></div>
+  <div class="groups" id="groups"></div>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const IN = $('in'), OUT = $('out');
+const enc = new TextEncoder(), dec = new TextDecoder('utf-8', {fatal: true});
+
+const b64e = s => { const b = enc.encode(s); let r = ''; for (let i = 0; i < b.length; i += 8192) r += String.fromCharCode.apply(null, b.subarray(i, i + 8192)); return btoa(r); };
+const b64d = s => { const r = atob(s.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')); return dec.decode(Uint8Array.from(r, c => c.charCodeAt(0))); };
+const words = s => s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+const lines = s => s.split(/\r?\n/);
+const rot = (s, n) => s.replace(/[a-z]/gi, c => { const b = c <= 'Z' ? 65 : 97; return String.fromCharCode((c.charCodeAt(0) - b + n) % 26 + b); });
+const collator = new Intl.Collator(undefined, {numeric: true, sensitivity: 'base'});
+
+const TOOLS = {
+  'Encode / decode': {
+    'Base64 encode': s => b64e(s),
+    'Base64 decode': s => b64d(s),
+    'URL encode': s => encodeURIComponent(s),
+    'URL decode': s => decodeURIComponent(s.replace(/\+/g, ' ')),
+    'HTML escape': s => s.replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c])),
+    'HTML unescape': s => { const d = new DOMParser().parseFromString(`<!doctype html><body>${s.replace(/</g, '&lt;')}`, 'text/html'); return d.body.textContent; },
+    'Hex encode': s => [...enc.encode(s)].map(b => b.toString(16).padStart(2, '0')).join(' '),
+    'Hex decode': s => dec.decode(Uint8Array.from((s.replace(/[^0-9a-f]/gi, '').match(/../g) || []).map(h => parseInt(h, 16)))),
+    'Binary': s => [...enc.encode(s)].map(b => b.toString(2).padStart(8, '0')).join(' '),
+    'ROT13': s => rot(s, 13),
+  },
+  'Case': {
+    'UPPER': s => s.toUpperCase(),
+    'lower': s => s.toLowerCase(),
+    'Title Case': s => s.toLowerCase().replace(/(^|[\s\-(["'])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()),
+    'Sentence case': s => s.toLowerCase().replace(/(^\s*|[.!?]\s+)(\p{L})/gu, (m, a, b) => a + b.toUpperCase()),
+    'camelCase': s => words(s).map((w, i) => i ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase()).join(''),
+    'PascalCase': s => words(s).map(w => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(''),
+    'snake_case': s => words(s).map(w => w.toLowerCase()).join('_'),
+    'kebab-case': s => words(s).map(w => w.toLowerCase()).join('-'),
+    'aLtErNaTiNg': s => { let k = 0; return s.replace(/\p{L}/gu, c => k++ % 2 ? c.toUpperCase() : c.toLowerCase()); },
+  },
+  'Lines': {
+    'Sort A→Z': s => lines(s).sort(collator.compare).join('\n'),
+    'Sort Z→A': s => lines(s).sort(collator.compare).reverse().join('\n'),
+    'Remove duplicates': s => [...new Set(lines(s))].join('\n'),
+    'Remove blank lines': s => lines(s).filter(l => l.trim()).join('\n'),
+    'Trim each line': s => lines(s).map(l => l.trim()).join('\n'),
+    'Reverse lines': s => lines(s).reverse().join('\n'),
+    'Shuffle lines': s => { const a = lines(s); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a.join('\n'); },
+    'Number lines': s => { const a = lines(s), w = String(a.length).length; return a.map((l, i) => String(i + 1).padStart(w) + '  ' + l).join('\n'); },
+    'Join into one line': s => lines(s).map(l => l.trim()).filter(Boolean).join(' '),
+  },
+  'Clean up': {
+    'Collapse spaces': s => s.replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim(),
+    'Strip HTML tags': s => new DOMParser().parseFromString(s, 'text/html').body.textContent,
+    'Smart quotes → plain': s => s.replace(/[‘’‛]/g, "'").replace(/[“”‟]/g, '"').replace(/[–—]/g, '-').replace(/…/g, '...').replace(/ /g, ' '),
+    'Remove accents': s => s.normalize('NFD').replace(/\p{M}/gu, ''),
+    'Reveal hidden chars': s => s.replace(/[​-‏‪-‮⁠-⁤﻿­]/g, c => `⟦U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}⟧`).replace(/\t/g, '→\t'),
+    'Remove hidden chars': s => s.replace(/[​-‏‪-‮⁠-⁤﻿­]/g, ''),
+    'Reverse text': s => [...s].reverse().join(''),
+    'Extract URLs': s => (s.match(/\bhttps?:\/\/[^\s<>"')\]]+/gi) || []).join('\n'),
+    'Extract emails': s => [...new Set(s.match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g) || [])].join('\n'),
+  },
+  'JSON': {
+    'Pretty print': s => JSON.stringify(JSON.parse(s), null, 2),
+    'Minify': s => JSON.stringify(JSON.parse(s)),
+    'Sort keys': s => JSON.stringify(sortKeys(JSON.parse(s)), null, 2),
+    'Escape as string': s => JSON.stringify(s),
+    'Unescape string': s => { const v = JSON.parse(s); if (typeof v !== 'string') throw new Error('Input is not a JSON string'); return v; },
+    'CSV → JSON': s => csvToJson(s),
+  },
+};
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, sortKeys(v[k])]));
+  return v;
+}
+function csvToJson(s) {
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q) { if (c === '"') { if (s[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && s[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += c;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  const [head, ...body] = rows.filter(r => r.some(x => x !== ''));
+  if (!head) return '[]';
+  return JSON.stringify(body.map(r => Object.fromEntries(head.map((h, i) => [h, r[i] ?? '']))), null, 2);
+}
+
+// Build buttons
+const groupsEl = $('groups');
+for (const [g, tools] of Object.entries(TOOLS)) {
+  const box = document.createElement('div'); box.className = 'group';
+  box.innerHTML = `<h2>${g}</h2><div class="btns"></div>`;
+  for (const [name, fn] of Object.entries(tools)) {
+    const b = document.createElement('button'); b.textContent = name;
+    b.onclick = () => run(fn);
+    box.lastChild.appendChild(b);
+  }
+  groupsEl.appendChild(box);
+}
+// Find & replace
+{
+  const box = document.createElement('div'); box.className = 'group';
+  box.innerHTML = `<h2>Find &amp; replace</h2><input type="text" id="find" placeholder="Find (text, or /regex/flags)"><input type="text" id="repl" placeholder="Replace with ($1 works for regex groups)"><div class="btns"><button id="doRepl">Replace all</button><button id="doCount">Count matches</button></div>`;
+  groupsEl.appendChild(box);
+  const pattern = () => {
+    const f = $('find').value, m = f.match(/^\/(.+)\/([a-z]*)$/);
+    if (m) return new RegExp(m[1], m[2].includes('g') ? m[2] : m[2] + 'g');
+    return new RegExp(f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+  };
+  $('doRepl').onclick = () => run(s => s.replace(pattern(), $('repl').value));
+  $('doCount').onclick = () => run(s => { const n = $('find').value ? (s.match(pattern()) || []).length : 0; return `${n} match${n === 1 ? '' : 'es'}`; });
+}
+// Hashes
+{
+  const box = document.createElement('div'); box.className = 'group';
+  box.innerHTML = `<h2>Hashes</h2><div class="btns"><button id="doHash">Hash input</button></div><div id="hashes"></div>`;
+  groupsEl.appendChild(box);
+  $('doHash').onclick = async () => {
+    const el = $('hashes');
+    if (!crypto.subtle) { el.textContent = 'Hashing is unavailable in this context.'; return; }
+    const data = enc.encode(IN.value); let html = '';
+    for (const alg of ['SHA-1', 'SHA-256', 'SHA-384', 'SHA-512']) {
+      const h = [...new Uint8Array(await crypto.subtle.digest(alg, data))].map(b => b.toString(16).padStart(2, '0')).join('');
+      html += `<b>${alg}</b> ${h}<br>`;
+    }
+    el.innerHTML = html;
+  };
+}
+
+function run(fn) {
+  $('err').textContent = '';
+  try { OUT.value = fn(IN.value); }
+  catch (e) { $('err').textContent = 'That didn\'t work: ' + e.message; }
+  stats();
+}
+function describe(s) {
+  const w = (s.match(/\S+/g) || []).length, l = s ? lines(s).length : 0;
+  return `${[...s].length.toLocaleString()} chars · ${w.toLocaleString()} words · ${l.toLocaleString()} lines · ${enc.encode(s).length.toLocaleString()} bytes`;
+}
+function stats() { $('statsIn').textContent = describe(IN.value); $('statsOut').textContent = describe(OUT.value); }
+IN.addEventListener('input', stats);
+$('swap').onclick = () => { IN.value = OUT.value; OUT.value = ''; stats(); };
+$('clearIn').onclick = () => { IN.value = ''; stats(); IN.focus(); };
+$('copy').onclick = () => {
+  OUT.select();
+  const ok = () => { $('copy').textContent = 'Copied'; setTimeout(() => $('copy').textContent = 'Copy', 1200); };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(OUT.value).then(ok, () => { document.execCommand('copy'); ok(); });
+  else { document.execCommand('copy'); ok(); }
+};
+$('paste').onclick = async () => {
+  try { IN.value = await navigator.clipboard.readText(); stats(); }
+  catch (e) { $('err').textContent = 'Your browser blocked clipboard reading. Use Ctrl+V in the input box instead.'; IN.focus(); }
+};
+stats();
+</script>
+</body>
+</html>

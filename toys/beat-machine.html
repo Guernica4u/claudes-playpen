@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beat Machine</title>
+<style>
+:root{--bg:#0e0f13;--panel:#161820;--ink:#e8e6e3;--muted:#8a8f9c;--line:#2a2d3a;--accent:#f0b35a}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:24px 16px}
+h1{font-size:18px;letter-spacing:.06em;margin:0 0 16px;font-weight:650}
+h1 span{color:var(--accent)}
+.top{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:16px}
+button{font:inherit;font-size:13px;color:var(--ink);background:#1e212b;border:1px solid var(--line);border-radius:6px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:#4a5066}
+#play{background:var(--accent);color:#1a1409;border-color:var(--accent);font-weight:600;min-width:84px}
+.knob{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+.knob input{width:110px;accent-color:var(--accent)}
+.knob output{color:var(--ink);min-width:3.2em;font-variant-numeric:tabular-nums}
+select{font:inherit;font-size:13px;background:#1e212b;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.seq{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;overflow-x:auto}
+.track{display:grid;grid-template-columns:92px 26px repeat(16,minmax(26px,1fr));gap:5px;align-items:center;margin-bottom:6px;min-width:640px}
+.track:last-child{margin-bottom:0}
+.name{font-size:12.5px;cursor:pointer;user-select:none;white-space:nowrap}
+.name:hover{color:var(--accent)}
+.mute{width:22px;height:22px;border-radius:5px;border:1px solid var(--line);background:#1e212b;font-size:10px;padding:0;color:var(--muted)}
+.mute.on{background:#3a2226;color:#ff7a6b;border-color:#5a3036}
+.step{aspect-ratio:1;border-radius:5px;background:#22252f;border:1px solid transparent;cursor:pointer;transition:background .06s,transform .06s}
+.step:nth-child(4n+3){background:#2a2e3a}
+.step.on{background:var(--c)!important;box-shadow:0 0 10px -2px var(--c)}
+.step.acc.on{box-shadow:0 0 0 2px #fff8 inset,0 0 14px -1px var(--c)}
+.step.now{border-color:#fff6}
+.step.now.on{transform:scale(1.08)}
+.help{color:var(--muted);font-size:12px;margin-top:12px}
+kbd{background:#23262f;border:1px solid var(--line);border-radius:3px;padding:0 4px;font-size:11px;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>BEAT<span>MACHINE</span></h1>
+  <div class="top">
+    <button id="play">▶ Play</button>
+    <label class="knob">Tempo <input type="range" id="bpm" min="60" max="180" value="104"><output id="bpmV"></output></label>
+    <label class="knob">Swing <input type="range" id="swing" min="0" max="60" value="12"><output id="swingV"></output></label>
+    <label class="knob">Volume <input type="range" id="vol" min="0" max="100" value="75"><output id="volV"></output></label>
+    <select id="preset"><option value="">Presets…</option></select>
+    <button id="rand">Randomise</button><button id="clear">Clear</button>
+  </div>
+  <div class="seq" id="seq"></div>
+  <div class="help">Click a step to turn it on; shift-click (or right-click) for an accented, louder hit. Click a sound's name to hear it. <kbd>Space</kbd> plays or stops. Your pattern is remembered in this browser.</div>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const STEPS = 16;
+let ac, master, comp, noiseBuf;
+
+function audio() {
+  if (ac) return;
+  ac = new (window.AudioContext || window.webkitAudioContext)();
+  comp = ac.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4;
+  master = ac.createGain(); master.gain.value = +$('vol').value / 100;
+  master.connect(comp).connect(ac.destination);
+  noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+  const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+}
+function env(g, t, peak, a, d) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d); }
+function osc(type, f, t, dur) { const o = ac.createOscillator(); o.type = type; o.frequency.setValueAtTime(f, t); o.start(t); o.stop(t + dur + .05); return o; }
+function noise(t, dur) { const s = ac.createBufferSource(); s.buffer = noiseBuf; s.start(t, Math.random() * .5); s.stop(t + dur + .05); return s; }
+function filt(type, f, q = 1) { const b = ac.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; }
+function gain() { return ac.createGain(); }
+
+// Each voice: (time, velocity 0..1)
+const VOICES = [
+  {name: 'Kick', c: '#f0b35a', play(t, v) {
+    const o = osc('sine', 150, t, .5), g = gain();
+    o.frequency.exponentialRampToValueAtTime(42, t + .12); env(g, t, v, .002, .42);
+    o.connect(g).connect(master);
+    const c = osc('square', 800, t, .02), cg = gain(); env(cg, t, v * .15, .001, .015); c.connect(filt('lowpass', 2000)).connect(cg).connect(master);
+  }},
+  {name: 'Snare', c: '#ff7a6b', play(t, v) {
+    const n = noise(t, .2), g = gain(); env(g, t, v * .7, .001, .18); n.connect(filt('highpass', 1200)).connect(g).connect(master);
+    const o = osc('triangle', 220, t, .12), og = gain(); o.frequency.exponentialRampToValueAtTime(160, t + .08); env(og, t, v * .5, .001, .1); o.connect(og).connect(master);
+  }},
+  {name: 'Clap', c: '#ff5fa2', play(t, v) {
+    const f = filt('bandpass', 1400, 1.2);
+    f.connect(master);
+    [0, .012, .024, .038].forEach((d, i) => { const n = noise(t + d, i === 3 ? .2 : .02), g = gain(); env(g, t + d, v * (i === 3 ? .8 : .6), .001, i === 3 ? .18 : .012); n.connect(g).connect(f); });
+  }},
+  {name: 'Closed hat', c: '#e8e6e3', play(t, v) {
+    const n = noise(t, .06), g = gain(); env(g, t, v * .35, .001, .045); n.connect(filt('highpass', 7500)).connect(g).connect(master);
+  }},
+  {name: 'Open hat', c: '#c7e59a', play(t, v) {
+    const n = noise(t, .35), g = gain(); env(g, t, v * .3, .002, .3); n.connect(filt('highpass', 6500)).connect(g).connect(master);
+  }},
+  {name: 'Tom', c: '#b58cff', play(t, v) {
+    const o = osc('sine', 180, t, .35), g = gain(); o.frequency.exponentialRampToValueAtTime(90, t + .25); env(g, t, v * .8, .002, .3); o.connect(g).connect(master);
+  }},
+  {name: 'Rim', c: '#4fd6d0', play(t, v) {
+    const o = osc('square', 1700, t, .03), g = gain(); env(g, t, v * .3, .001, .025); o.connect(filt('bandpass', 1700, 4)).connect(g).connect(master);
+  }},
+  {name: 'Bass', c: '#6aa6ff', notes: true, play(t, v, step) {
+    const f = [55, 55, 65.41, 49][Math.floor(step / 4) % 4];
+    const o = osc('sawtooth', f, t, .3), g = gain(), lp = filt('lowpass', 900, 6);
+    lp.frequency.setValueAtTime(900 * (0.6 + v), t); lp.frequency.exponentialRampToValueAtTime(120, t + .25);
+    env(g, t, v * .45, .004, .26); o.connect(lp).connect(g).connect(master);
+  }},
+];
+
+// grid[track][step] = 0 off, 1 on, 2 accent
+let grid = VOICES.map(() => Array(STEPS).fill(0));
+let muted = VOICES.map(() => false);
+const PRESETS = {
+  'Boom bap':   ['x...x.....x.x...', '....X.......X...', '................', 'x.x.x.x.x.x.x.x.', '...............x', '................', '......x.......x.', 'x.....x...x.....'],
+  'Four on the floor': ['X...X...X...X...', '................', '....x.......x...', '..x...x...x...x.', '..X...X...X...X.', '................', '................', 'x..x..x.x..x..x.'],
+  'Breakbeat':  ['X.x.......xx....', '....X..x.x..X..x', '................', 'x.xxx.x.x.x.xx.x', '................', '..............x.', '.......x........', 'x.....x.......x.'],
+  'Trap-ish':   ['X......x..x.....', '........X.......', '........x.......', 'xxx.x.xxx.xxxx.x', '................', '..............xx', '................', 'X......x..x.....'],
+  'Bossa':      ['x..x..x.x..x..x.', '................', '................', 'x.x.x.x.x.x.x.x.', '................', '................', 'x..x..x...x..x..', 'x.....x.x.....x.'],
+};
+const toGrid = rows => rows.map(r => [...r].map(c => c === 'X' ? 2 : c === 'x' ? 1 : 0));
+
+// Build UI
+const seqEl = $('seq'), stepEls = [];
+VOICES.forEach((v, ti) => {
+  const row = document.createElement('div'); row.className = 'track'; row.style.setProperty('--c', v.c);
+  const name = document.createElement('div'); name.className = 'name'; name.textContent = v.name; name.style.color = v.c;
+  name.onclick = () => { audio(); ac.resume(); v.play(ac.currentTime + .01, .9, 0); };
+  const m = document.createElement('button'); m.className = 'mute'; m.textContent = 'M'; m.title = 'Mute';
+  m.onclick = () => { muted[ti] = !muted[ti]; m.classList.toggle('on', muted[ti]); save(); };
+  row.append(name, m);
+  stepEls[ti] = [];
+  for (let s = 0; s < STEPS; s++) {
+    const b = document.createElement('div'); b.className = 'step';
+    const set = accent => { grid[ti][s] = grid[ti][s] ? 0 : accent ? 2 : 1; draw(ti, s); save(); };
+    b.onclick = e => set(e.shiftKey);
+    b.oncontextmenu = e => { e.preventDefault(); set(true); };
+    row.appendChild(b); stepEls[ti][s] = b;
+  }
+  seqEl.appendChild(row);
+});
+function draw(ti, s) { const b = stepEls[ti][s]; b.classList.toggle('on', grid[ti][s] > 0); b.classList.toggle('acc', grid[ti][s] === 2); }
+function drawAll() { VOICES.forEach((_, ti) => { for (let s = 0; s < STEPS; s++) draw(ti, s); seqEl.children[ti].querySelector('.mute').classList.toggle('on', muted[ti]); }); }
+
+for (const k of Object.keys(PRESETS)) { const o = document.createElement('option'); o.value = o.textContent = k; $('preset').appendChild(o); }
+$('preset').onchange = e => { if (e.target.value) { grid = toGrid(PRESETS[e.target.value]); drawAll(); save(); } e.target.value = ''; };
+$('clear').onclick = () => { grid = VOICES.map(() => Array(STEPS).fill(0)); drawAll(); save(); };
+$('rand').onclick = () => {
+  const dens = [.25, .15, .08, .5, .1, .08, .12, .22];
+  grid = VOICES.map((_, ti) => Array.from({length: STEPS}, (_, s) => {
+    let p = dens[ti];
+    if (ti === 0 && s % 4 === 0) p = .7;
+    if (ti === 1 && (s === 4 || s === 12)) p = .9;
+    if (ti === 3 && s % 2 === 0) p = .8;
+    return Math.random() < p ? (Math.random() < .2 ? 2 : 1) : 0;
+  }));
+  drawAll(); save();
+};
+
+function save() { try { localStorage.setItem('beat-machine', JSON.stringify({grid, muted, bpm: +$('bpm').value, swing: +$('swing').value})); } catch (e) {} }
+function load() {
+  try {
+    const d = JSON.parse(localStorage.getItem('beat-machine'));
+    if (d && Array.isArray(d.grid) && d.grid.length === VOICES.length) {
+      grid = d.grid; muted = d.muted || muted; $('bpm').value = d.bpm || 104; $('swing').value = d.swing ?? 12; return;
+    }
+  } catch (e) {}
+  grid = toGrid(PRESETS['Boom bap']);
+}
+
+for (const [id, fmt] of [['bpm', v => v], ['swing', v => v + '%'], ['vol', v => v + '%']]) {
+  const upd = () => $(id + 'V').textContent = fmt($(id).value);
+  $(id).addEventListener('input', () => { upd(); if (id === 'vol' && master) master.gain.value = +$('vol').value / 100; if (id !== 'vol') save(); });
+  upd();
+}
+
+// Scheduler: look ahead ~100ms and queue notes on the audio clock for tight timing.
+let playing = false, step = 0, nextT = 0, timer, uiQueue = [];
+function schedule() {
+  const spb = 60 / +$('bpm').value / 4;   // seconds per 16th
+  while (nextT < ac.currentTime + 0.12) {
+    const sw = step % 2 ? spb * (+$('swing').value / 100) * 0.5 : 0;
+    VOICES.forEach((v, ti) => { const g = grid[ti][step]; if (g && !muted[ti]) v.play(nextT + sw, g === 2 ? 1 : .62, step); });
+    uiQueue.push({step, t: nextT + sw});
+    nextT += spb; step = (step + 1) % STEPS;
+  }
+}
+let shown = -1;
+function paint() {
+  if (!playing) return;
+  while (uiQueue.length && uiQueue[0].t <= ac.currentTime) {
+    const s = uiQueue.shift().step;
+    if (shown >= 0) stepEls.forEach(r => r[shown].classList.remove('now'));
+    stepEls.forEach(r => r[s].classList.add('now')); shown = s;
+  }
+  requestAnimationFrame(paint);
+}
+function play() {
+  audio(); ac.resume();
+  playing = true; step = 0; nextT = ac.currentTime + .05; uiQueue = [];
+  schedule(); timer = setInterval(schedule, 25); requestAnimationFrame(paint);
+  $('play').textContent = '■ Stop';
+}
+function stop() {
+  playing = false; clearInterval(timer);
+  if (shown >= 0) stepEls.forEach(r => r[shown].classList.remove('now')); shown = -1;
+  $('play').textContent = '▶ Play';
+}
+$('play').onclick = () => playing ? stop() : play();
+addEventListener('keydown', e => { if (e.key === ' ' && e.target.tagName !== 'SELECT') { e.preventDefault(); $('play').click(); } });
+
+load(); drawAll();
+$('bpmV').textContent = $('bpm').value; $('swingV').textContent = $('swing').value + '%';
+</script>
+</body>
+</html>

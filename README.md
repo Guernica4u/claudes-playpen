@@ -1,32 +1,30 @@
-# Sandfall
+# Claude's Playpen
 
-A falling-sand physics toy in a single HTML file. It has no dependencies, needs no internet and tracks nothing.
+Small things I've built. Each one is a **single HTML file** that runs offline in your browser, with no installs, no accounts and no tracking.
 
-**To play:** download `sandfall.html` and double-click it (it opens in Firefox or any browser).
+**Start here:** download the repo (Code → Download ZIP), unzip it and double-click **`index.html`**. It links to everything below.
 
-## What's in the box
+## 🎮 games/
 
-| Element | Behaviour |
+| File | What it is |
 |---|---|
-| Sand | Piles up and sinks through liquids |
-| Water | Flows, puts out fire, feeds plants, cools lava into stone |
-| Stone | Solid. Acid eats it, slowly |
-| Wood | Solid. Burns into long-lived embers |
-| Plant | Grows by drinking nearby water. Very flammable |
-| Fire | Rises and spreads to wood, plants and oil |
-| Oil | Floats on water. Burns fast |
-| Lava | Slow and molten. Ignites things, turns to stone in water |
-| Acid | Dissolves almost everything and uses itself up |
-| Ice | Freezes nearby water, melts near heat |
-| Steam | Rises, then condenses back into rain |
-| Smoke | Drifts up and fades |
+| `sandfall.html` | Falling-sand physics. Paint sand, water, fire, lava, acid, plants, ice and more, and watch them react. Left-drag paints, right-drag erases, number keys pick elements. |
+| `minesweeper.html` | Classic Minesweeper in three sizes. The first click is always safe, clicking a number whose flags are all placed opens its neighbours, and best times are saved. Has a flag mode for touch screens. |
+| `lunar-lander.html` | Land on the pads with limited fuel. ←/→ rotate, ↑ or Space thrusts. Harder pads score more, and leftover fuel carries into the next level. |
 
-## Controls
+## 🧰 programs/
 
-- **Left-drag** paints. **Right-drag** erases. **Hold still** to keep pouring.
-- `1`–`0`, `-`, `=` pick an element. `E` picks the eraser.
-- `[` / `]` change brush size. `Space` pauses. `.` steps one frame while paused.
-- `C` clears the screen. `R` resets the starting scene.
-- **Rain** turns on a steady drizzle. **Save / Load** keep one snapshot in your browser.
+| File | What it is |
+|---|---|
+| `password-generator.html` | Random passwords, pronounceable passphrases and PINs from your browser's cryptographic random generator. Shows exact entropy and a worst-case crack time. Nothing is saved or sent anywhere. |
+| `text-tools.html` | Base64, URL, hex and HTML encoding, SHA hashes, case conversion, sort and deduplicate lines, find and replace (regex works too), JSON pretty-printing, CSV → JSON, and revealing hidden characters. |
+| `focus-timer.html` | Pomodoro-style focus and break rounds with a progress ring, a chime, the countdown in the tab title and a daily tally. |
 
-Things to try: set fire to the oil slick, drop lava on the ice, pour acid on the tree, or seal some water in a stone box with a plant and wait.
+## 🌀 toys/
+
+| File | What it is |
+|---|---|
+| `flow-field.html` | Generative art made by thousands of particles drifting through a noise field. Change the palettes and settings, drag to stir, and save your favourites as PNGs. |
+| `beat-machine.html` | A 16-step drum machine with synthesised kick, snare, clap, hats, tom, rim and bass. It has swing, accents, presets and a randomise button. |
+
+Some pages remember small things in your browser, such as best times, a saved sandbox or your beat pattern. In a private window they still work but forget everything when you close it.
