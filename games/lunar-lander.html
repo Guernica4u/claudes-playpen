@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lunar Lander</title>
+<style>
+html,body{margin:0;height:100%;background:#05060a;color:#e8e6e3;font:14px/1.4 ui-monospace,Consolas,monospace;overflow:hidden}
+canvas{display:block;width:100vw;height:100vh}
+#touch{position:fixed;bottom:16px;left:0;right:0;display:none;justify-content:space-between;padding:0 16px;pointer-events:none}
+#touch div{display:flex;gap:10px}
+#touch button{pointer-events:auto;width:64px;height:64px;border-radius:50%;border:1px solid #444a5e;background:#161820cc;color:#e8e6e3;font-size:22px;touch-action:none}
+@media (pointer:coarse){#touch{display:flex}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="touch"><div><button data-k="left">⟲</button><button data-k="right">⟳</button></div><div><button data-k="up">▲</button></div></div>
+<script>
+"use strict";
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let VW, VH, DPR;
+function resize() {
+  DPR = Math.min(2, devicePixelRatio || 1);
+  VW = innerWidth; VH = innerHeight;
+  cv.width = VW * DPR; cv.height = VH * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+addEventListener('resize', () => { resize(); if (state !== 'fly') newTerrain(); });
+resize();
+
+// World is in "screen" units; terrain spans the viewport width.
+const G = 1.62 * 9;          // gravity, px/s^2 (scaled moon gravity)
+const THRUST = 44, TURN = 2.6, BURN = 9;
+const SAFE_VY = 22, SAFE_VX = 12, SAFE_ANG = 0.22;
+let ship, terrain, pads, stars, parts, state, score = 0, level = 1, msg = '', msgSub = '', best = 0;
+try { best = +localStorage.getItem('lander-best') || 0; } catch (e) {}
+
+function newTerrain() {
+  const n = 64, pts = [];
+  let h = VH * 0.72;
+  for (let i = 0; i <= n; i++) {
+    h += (Math.random() - 0.5) * VH * 0.09;
+    h = Math.max(VH * 0.45, Math.min(VH * 0.92, h));
+    pts.push({x: VW * i / n, y: h});
+  }
+  pads = [];
+  const want = Math.max(2, 4 - Math.floor(level / 3));
+  const used = new Set();
+  for (let k = 0; k < want; k++) {
+    const mult = [1, 2, 3, 5][Math.min(3, k + Math.floor(Math.random() * 2))];
+    const width = Math.max(1, 4 - Math.floor(mult / 2)) + (level < 3 ? 1 : 0);
+    let s, tries = 0;
+    do { s = 2 + Math.floor(Math.random() * (n - width - 4)); tries++; }
+    while (tries < 50 && [...Array(width + 3)].some((_, j) => used.has(s - 1 + j)));
+    for (let j = 0; j <= width; j++) { used.add(s + j); pts[s + j].y = pts[s].y; }
+    pads.push({x0: pts[s].x, x1: pts[s + width].x, y: pts[s].y, mult});
+  }
+  terrain = pts;
+  stars = [...Array(140)].map(() => ({x: Math.random() * VW, y: Math.random() * VH * 0.8, r: Math.random() * 1.3 + .2}));
+}
+function newShip(keepFuel) {
+  ship = {x: VW * (0.15 + Math.random() * 0.7), y: 60, vx: (Math.random() - .5) * 40, vy: 0, a: 0,
+          fuel: keepFuel ?? 1000, thrust: false};
+  parts = []; state = 'fly'; msg = ''; msgSub = '';
+}
+function groundAt(x) {
+  for (let i = 0; i < terrain.length - 1; i++) {
+    const a = terrain[i], b = terrain[i + 1];
+    if (x >= a.x && x <= b.x) return a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+  }
+  return VH;
+}
+
+const keys = {};
+const map = {ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right', ArrowUp: 'up', w: 'up', W: 'up', ' ': 'up'};
+addEventListener('keydown', e => {
+  if (map[e.key]) { keys[map[e.key]] = true; e.preventDefault(); }
+  if ((e.key === 'Enter' || e.key === 'r' || e.key === 'R') && state !== 'fly') next();
+});
+addEventListener('keyup', e => { if (map[e.key]) keys[map[e.key]] = false; });
+document.querySelectorAll('#touch button').forEach(b => {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', e => { e.preventDefault(); keys[k] = true; if (state !== 'fly') next(); });
+  b.addEventListener('pointerup', () => keys[k] = false);
+  b.addEventListener('pointerleave', () => keys[k] = false);
+});
+cv.addEventListener('pointerdown', () => { if (state !== 'fly') next(); });
+
+function next() {
+  if (state === 'landed') { level++; newTerrain(); newShip(ship.fuel + 250); }
+  else { level = 1; score = 0; newTerrain(); newShip(); }
+}
+
+function explode(x, y, n, hot) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = Math.random() * (hot ? 160 : 60);
+    parts.push({x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - (hot ? 40 : 0), life: 1 + Math.random(), hot});
+  }
+}
+
+function update(dt) {
+  if (state === 'fly') {
+    if (keys.left) ship.a -= TURN * dt;
+    if (keys.right) ship.a += TURN * dt;
+    ship.thrust = keys.up && ship.fuel > 0;
+    if (ship.thrust) {
+      ship.vx += Math.sin(ship.a) * THRUST * dt;
+      ship.vy -= Math.cos(ship.a) * THRUST * dt;
+      ship.fuel = Math.max(0, ship.fuel - BURN * 10 * dt);
+      for (let k = 0; k < 3; k++) {
+        const sp = 90 + Math.random() * 60, j = (Math.random() - .5) * .5;
+        parts.push({x: ship.x - Math.sin(ship.a) * 9, y: ship.y + Math.cos(ship.a) * 9,
+          vx: ship.vx - Math.sin(ship.a + j) * sp, vy: ship.vy + Math.cos(ship.a + j) * sp, life: .35 + Math.random() * .3, hot: true});
+      }
+    }
+    ship.vy += G * dt;
+    ship.x += ship.vx * dt; ship.y += ship.vy * dt;
+    if (ship.x < 0) ship.x += VW; if (ship.x > VW) ship.x -= VW;
+    // contact: check the two feet and the nose
+    const c = Math.cos(ship.a), s = Math.sin(ship.a);
+    const pts = [[-8, 10], [8, 10], [0, -10]].map(([px, py]) => [ship.x + px * c - py * s, ship.y + px * s + py * c]);
+    const hit = pts.some(([px, py]) => py >= groundAt(px));
+    if (hit || ship.y < -400) {
+      const pad = pads.find(p => ship.x - 8 >= p.x0 && ship.x + 8 <= p.x1);
+      const ang = Math.abs(Math.atan2(Math.sin(ship.a), Math.cos(ship.a)));
+      if (pad && ship.vy < SAFE_VY && Math.abs(ship.vx) < SAFE_VX && ang < SAFE_ANG) {
+        const gentle = 1 + (SAFE_VY - ship.vy) / SAFE_VY;
+        const pts = Math.round(50 * pad.mult * gentle);
+        score += pts; state = 'landed'; ship.y = pad.y - 10; ship.vx = ship.vy = 0; ship.a = 0;
+        msg = pts >= 50 * pad.mult * 1.6 ? 'Feather-light landing!' : 'The Eagle has landed.';
+        msgSub = `+${pts} (x${pad.mult} pad) · fuel carries over · press Enter`;
+        explode(ship.x, pad.y, 20, false);
+      } else {
+        state = 'crashed';
+        const why = !pad ? 'missed the pads' : ship.vy >= SAFE_VY ? 'came in too fast' : Math.abs(ship.vx) >= SAFE_VX ? 'drifting sideways' : 'not upright';
+        msg = 'Crashed — ' + why + '.';
+        msgSub = `Final score ${score} · press Enter to start over`;
+        if (score > best) { best = score; try { localStorage.setItem('lander-best', best); } catch (e) {} }
+        explode(ship.x, ship.y, 90, true);
+      }
+    }
+  }
+  for (const p of parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += G * dt * (p.hot ? .3 : 1); p.life -= dt;
+    const g = groundAt(p.x); if (p.y > g) { p.y = g; p.vy *= -.3; p.vx *= .5; } }
+  parts = parts.filter(p => p.life > 0);
+}
+
+function draw() {
+  ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, VW, VH);
+  for (const s of stars) { ctx.fillStyle = `rgba(255,255,255,${.3 + s.r * .4})`; ctx.fillRect(s.x, s.y, s.r, s.r); }
+  // terrain
+  ctx.beginPath(); ctx.moveTo(0, VH);
+  for (const p of terrain) ctx.lineTo(p.x, p.y);
+  ctx.lineTo(VW, VH); ctx.closePath();
+  const gr = ctx.createLinearGradient(0, VH * .45, 0, VH);
+  gr.addColorStop(0, '#2b2e38'); gr.addColorStop(1, '#101117');
+  ctx.fillStyle = gr; ctx.fill();
+  ctx.strokeStyle = '#8a8f9c'; ctx.lineWidth = 1.5; ctx.stroke();
+  for (const p of pads) {
+    ctx.strokeStyle = '#f0b35a'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(p.x0, p.y); ctx.lineTo(p.x1, p.y); ctx.stroke();
+    ctx.fillStyle = '#f0b35a'; ctx.font = '12px ui-monospace,Consolas,monospace'; ctx.textAlign = 'center';
+    ctx.fillText('x' + p.mult, (p.x0 + p.x1) / 2, p.y + 18);
+  }
+  for (const p of parts) {
+    const a = Math.max(0, Math.min(1, p.life));
+    ctx.fillStyle = p.hot ? `rgba(255,${150 + 100 * a | 0},80,${a})` : `rgba(160,160,170,${a * .7})`;
+    ctx.fillRect(p.x - 1, p.y - 1, 2.2, 2.2);
+  }
+  if (state !== 'crashed') {
+    ctx.save(); ctx.translate(ship.x, ship.y); ctx.rotate(ship.a);
+    ctx.strokeStyle = '#e8e6e3'; ctx.lineWidth = 1.6; ctx.fillStyle = '#161820';
+    ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(7, -2); ctx.lineTo(7, 4); ctx.lineTo(-7, 4); ctx.lineTo(-7, -2); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-5, 4); ctx.lineTo(-9, 10); ctx.moveTo(5, 4); ctx.lineTo(9, 10);
+    ctx.moveTo(-11, 10); ctx.lineTo(-7, 10); ctx.moveTo(7, 10); ctx.lineTo(11, 10); ctx.stroke();
+    if (ship.thrust) { ctx.fillStyle = '#ffb347'; ctx.beginPath(); ctx.moveTo(-4, 5); ctx.lineTo(4, 5); ctx.lineTo(0, 10 + Math.random() * 10); ctx.fill(); }
+    ctx.restore();
+  }
+  // HUD
+  const alt = Math.max(0, groundAt(ship.x) - ship.y - 10);
+  ctx.textAlign = 'left'; ctx.font = '13px ui-monospace,Consolas,monospace';
+  const ok = (v, lim) => Math.abs(v) < lim ? '#5fcf80' : '#ff7a6b';
+  const rows = [
+    ['SCORE', score, '#e8e6e3'], ['LEVEL', level, '#e8e6e3'], ['BEST', best, '#8a8f9c'],
+    ['FUEL', Math.round(ship.fuel), ship.fuel < 200 ? '#ff7a6b' : '#e8e6e3'],
+    ['ALT', Math.round(alt), '#e8e6e3'],
+    ['H-SPD', ship.vx.toFixed(1), ok(ship.vx, SAFE_VX)],
+    ['V-SPD', ship.vy.toFixed(1), ship.vy < SAFE_VY ? '#5fcf80' : '#ff7a6b'],
+  ];
+  rows.forEach(([k, v, c], i) => { ctx.fillStyle = '#8a8f9c'; ctx.fillText(k, 16, 26 + i * 18); ctx.fillStyle = c; ctx.fillText(v, 80, 26 + i * 18); });
+  ctx.fillStyle = '#23262f'; ctx.fillRect(16, 26 + rows.length * 18 - 6, 120, 5);
+  ctx.fillStyle = '#f0b35a'; ctx.fillRect(16, 26 + rows.length * 18 - 6, 120 * Math.min(1, ship.fuel / 1000), 5);
+  ctx.textAlign = 'right'; ctx.fillStyle = '#8a8f9c';
+  ctx.fillText('← → rotate · ↑ / Space thrust', VW - 16, 26);
+  if (msg) {
+    ctx.textAlign = 'center';
+    ctx.font = '600 26px system-ui,sans-serif'; ctx.fillStyle = state === 'landed' ? '#5fcf80' : '#ff7a6b';
+    ctx.fillText(msg, VW / 2, VH * .3);
+    ctx.font = '14px ui-monospace,Consolas,monospace'; ctx.fillStyle = '#e8e6e3';
+    ctx.fillText(msgSub, VW / 2, VH * .3 + 30);
+  }
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.033, (now - last) / 1000); last = now;
+  update(dt); draw();
+  requestAnimationFrame(loop);
+}
+newTerrain(); newShip();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Focus Timer</title>
+<style>
+:root{--bg:#0e0f13;--panel:#161820;--ink:#e8e6e3;--muted:#8a8f9c;--line:#2a2d3a;--c:#f0b35a}
+body.break{--c:#5fcf80}
+body.long{--c:#6aa6ff}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:460px;margin:0 auto;padding:28px 16px;display:flex;flex-direction:column;align-items:center}
+.modes{display:flex;gap:6px;margin-bottom:24px}
+button{font:inherit;font-size:13px;color:var(--ink);background:#1e212b;border:1px solid var(--line);border-radius:6px;padding:7px 12px;cursor:pointer}
+button:hover{border-color:#4a5066}
+button.on{border-color:var(--c);box-shadow:0 0 0 1px var(--c) inset}
+.ring{position:relative;width:min(300px,80vw);aspect-ratio:1}
+.ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:8}
+.ring .track{stroke:#20232d}
+.ring .prog{stroke:var(--c);stroke-linecap:round;transition:stroke-dashoffset .4s linear,stroke .3s}
+.center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#time{font:600 clamp(48px,15vw,68px)/1 ui-monospace,Consolas,monospace;letter-spacing:.02em;font-variant-numeric:tabular-nums}
+#label{color:var(--c);margin-top:8px;font-size:13px;letter-spacing:.08em;text-transform:uppercase}
+.controls{display:flex;gap:8px;margin-top:24px}
+#go{background:var(--c);color:#111;border-color:var(--c);font-weight:600;min-width:110px}
+#task{margin-top:22px;width:100%;font:inherit;background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 12px;text-align:center}
+#task:focus{outline:none;border-color:#4a5066}
+.dots{display:flex;gap:6px;margin-top:18px}
+.dots i{width:10px;height:10px;border-radius:50%;background:#23262f}
+.dots i.done{background:var(--c)}
+#today{margin-top:8px;color:var(--muted);font-size:12px}
+details{margin-top:24px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+summary{cursor:pointer;color:var(--muted)}
+.set{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center;margin-top:12px}
+.set input[type=number]{width:70px;font:inherit;background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+.set input[type=checkbox]{accent-color:var(--c);width:16px;height:16px}
+.keys{margin-top:14px;color:var(--muted);font-size:12px}
+kbd{background:#23262f;border:1px solid var(--line);border-radius:3px;padding:0 4px;font-size:11px;color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="modes"><button data-m="focus" class="on">Focus</button><button data-m="break">Short break</button><button data-m="long">Long break</button></div>
+  <div class="ring">
+    <svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="54"/><circle class="prog" id="prog" cx="60" cy="60" r="54"/></svg>
+    <div class="center"><div id="time">25:00</div><div id="label">Focus</div></div>
+  </div>
+  <div class="controls"><button id="go">Start</button><button id="reset">Reset</button><button id="skip">Skip</button></div>
+  <input id="task" placeholder="What are you working on?" maxlength="80">
+  <div class="dots" id="dots"></div>
+  <div id="today"></div>
+  <details>
+    <summary>Settings</summary>
+    <div class="set">
+      <label for="sFocus">Focus (minutes)</label><input type="number" id="sFocus" min="1" max="180" value="25">
+      <label for="sBreak">Short break</label><input type="number" id="sBreak" min="1" max="60" value="5">
+      <label for="sLong">Long break</label><input type="number" id="sLong" min="1" max="90" value="15">
+      <label for="sEvery">Long break after this many focus rounds</label><input type="number" id="sEvery" min="2" max="12" value="4">
+      <label for="sAuto">Start the next round automatically</label><input type="checkbox" id="sAuto">
+      <label for="sSound">Chime at the end</label><input type="checkbox" id="sSound" checked>
+    </div>
+  </details>
+  <div class="keys"><kbd>Space</kbd> start/pause · <kbd>R</kbd> reset · <kbd>S</kbd> skip</div>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const LABEL = {focus: 'Focus', break: 'Short break', long: 'Long break'};
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('focus-' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('focus-' + k, JSON.stringify(v)); } catch (e) {} },
+};
+const cfg = Object.assign({focus: 25, break: 5, long: 15, every: 4, auto: false, sound: true}, store.get('cfg', {}));
+$('sFocus').value = cfg.focus; $('sBreak').value = cfg.break; $('sLong').value = cfg.long; $('sEvery').value = cfg.every;
+$('sAuto').checked = cfg.auto; $('sSound').checked = cfg.sound;
+$('task').value = store.get('task', '');
+
+let mode = 'focus', total, remaining, running = false, endAt = 0, rounds = 0, tick;
+const C = 2 * Math.PI * 54;
+$('prog').style.strokeDasharray = C;
+
+function todayKey() { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; }
+function showToday() {
+  const t = store.get('today', {}), n = t.day === todayKey() ? t.n : 0, mins = t.day === todayKey() ? t.mins : 0;
+  $('today').textContent = n ? `Today: ${n} focus round${n > 1 ? 's' : ''} · ${Math.floor(mins / 60) ? Math.floor(mins / 60) + 'h ' : ''}${mins % 60}m` : 'No focus rounds yet today';
+}
+function logRound(mins) {
+  const t = store.get('today', {});
+  const cur = t.day === todayKey() ? t : {day: todayKey(), n: 0, mins: 0};
+  cur.n++; cur.mins += mins; store.set('today', cur); showToday();
+}
+function dots() {
+  $('dots').innerHTML = '';
+  for (let i = 0; i < cfg.every; i++) { const d = document.createElement('i'); if (i < rounds % cfg.every || (rounds && rounds % cfg.every === 0 && mode === 'long')) d.className = 'done'; $('dots').appendChild(d); }
+}
+function fmt(s) { s = Math.max(0, Math.ceil(s)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; }
+function render() {
+  $('time').textContent = fmt(remaining);
+  $('prog').style.strokeDashoffset = C * (1 - remaining / total);
+  document.title = running ? `${fmt(remaining)} · ${LABEL[mode]}` : 'Focus Timer';
+}
+function setMode(m, autostart) {
+  mode = m; running = false; clearInterval(tick);
+  document.body.className = m === 'focus' ? '' : m;
+  document.querySelectorAll('[data-m]').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  $('label').textContent = LABEL[m];
+  total = remaining = cfg[m] * 60;
+  $('go').textContent = 'Start';
+  dots(); render();
+  if (autostart) start();
+}
+function start() {
+  running = true; endAt = Date.now() + remaining * 1000; $('go').textContent = 'Pause';
+  clearInterval(tick);
+  tick = setInterval(() => {
+    remaining = (endAt - Date.now()) / 1000;
+    if (remaining <= 0) { remaining = 0; render(); finish(); } else render();
+  }, 250);
+  render();
+}
+function pause() { running = false; clearInterval(tick); remaining = Math.max(0, (endAt - Date.now()) / 1000); $('go').textContent = 'Resume'; render(); }
+function finish(skipped) {
+  clearInterval(tick); running = false;
+  if (!skipped && cfg.sound) chime();
+  let next;
+  if (mode === 'focus') {
+    if (!skipped) logRound(cfg.focus);
+    rounds++;
+    next = rounds % cfg.every === 0 ? 'long' : 'break';
+  } else next = 'focus';
+  if (!skipped) notify(mode === 'focus' ? 'Focus round done. Take a break.' : 'Break over. Back to it.');
+  setMode(next, cfg.auto && !skipped);
+}
+function notify(text) {
+  try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Focus Timer', {body: text}); } catch (e) {}
+}
+let actx;
+function chime() {
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = actx.currentTime;
+    [[660, 0], [880, .18], [990, .36]].forEach(([f, d]) => {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t + d); g.gain.linearRampToValueAtTime(.25, t + d + .02); g.gain.exponentialRampToValueAtTime(.001, t + d + 1.2);
+      o.connect(g).connect(actx.destination); o.start(t + d); o.stop(t + d + 1.3);
+    });
+  } catch (e) {}
+}
+
+$('go').onclick = () => {
+  if (actx === undefined) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  running ? pause() : start();
+};
+$('reset').onclick = () => setMode(mode);
+$('skip').onclick = () => finish(true);
+document.querySelectorAll('[data-m]').forEach(b => b.onclick = () => setMode(b.dataset.m));
+$('task').addEventListener('input', () => store.set('task', $('task').value));
+function saveCfg() {
+  const n = (id, lo, hi, d) => { const v = Math.round(+$(id).value); return v >= lo && v <= hi ? v : d; };
+  cfg.focus = n('sFocus', 1, 180, 25); cfg.break = n('sBreak', 1, 60, 5); cfg.long = n('sLong', 1, 90, 15); cfg.every = n('sEvery', 2, 12, 4);
+  cfg.auto = $('sAuto').checked; cfg.sound = $('sSound').checked;
+  store.set('cfg', cfg);
+  if (!running) setMode(mode); else dots();
+}
+document.querySelectorAll('.set input').forEach(i => i.addEventListener('change', saveCfg));
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  if (k === ' ') { e.preventDefault(); $('go').click(); }
+  else if (k === 'r') setMode(mode);
+  else if (k === 's') finish(true);
+});
+showToday(); setMode('focus');
+</script>
+</body>
+</html>
