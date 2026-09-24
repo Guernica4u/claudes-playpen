@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unit Converter</title>
+<style>
+:root{--bg:#0e0f13;--panel:#161820;--ink:#e8e6e3;--muted:#8a8f9c;--line:#2a2d3a;--accent:#f0b35a}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:24px 16px}
+h1{font-size:18px;letter-spacing:.06em;margin:0 0 16px;font-weight:650}
+h1 span{color:var(--accent)}
+.cats{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+button{font:inherit;font-size:13px;color:var(--ink);background:#1e212b;border:1px solid var(--line);border-radius:6px;padding:6px 11px;cursor:pointer}
+button:hover{border-color:#4a5066}
+button.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.main{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:end;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+@media (max-width:560px){.main{grid-template-columns:1fr}#flip{justify-self:center;transform:rotate(90deg)}}
+.side{display:flex;flex-direction:column;gap:6px}
+input,select{font:inherit;background:#0f1117;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%}
+input{font:600 22px ui-monospace,Consolas,monospace}
+input:focus,select:focus{outline:none;border-color:#4a5066}
+#flip{height:44px;font-size:18px}
+.formula{color:var(--muted);font-size:12.5px;margin:10px 2px 0}
+table{width:100%;border-collapse:collapse;margin-top:18px;font-variant-numeric:tabular-nums}
+td{padding:7px 10px;border-bottom:1px solid var(--line)}
+td:first-child{color:var(--muted)}
+td:last-child{text-align:right;font-family:ui-monospace,Consolas,monospace}
+tr{cursor:pointer}
+tr:hover td{background:#1a1c24}
+tr.sel td{color:var(--accent)}
+.note{color:var(--muted);font-size:12px;margin-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>UNIT<span>CONVERTER</span></h1>
+  <div class="cats" id="cats"></div>
+  <div class="main">
+    <div class="side"><input id="a" inputmode="decimal" value="1"><select id="ua"></select></div>
+    <button id="flip" title="Swap">⇄</button>
+    <div class="side"><input id="b" inputmode="decimal"><select id="ub"></select></div>
+  </div>
+  <div class="formula" id="formula"></div>
+  <table id="all"></table>
+  <div class="note">Click any row to convert into that unit. You can type simple maths such as <code>3*12</code> or <code>5/8</code>.</div>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+// Each unit: [name, factor to base unit] or [name, toBase fn, fromBase fn]
+const CATS = {
+  Length: {base: 'metre', units: [['millimetre', .001], ['centimetre', .01], ['metre', 1], ['kilometre', 1000], ['inch', .0254], ['foot', .3048], ['yard', .9144], ['mile', 1609.344], ['nautical mile', 1852], ['light-year', 9.4607304725808e15]], def: ['kilometre', 'mile']},
+  Mass: {units: [['milligram', 1e-6], ['gram', .001], ['kilogram', 1], ['tonne', 1000], ['ounce', .028349523125], ['pound', .45359237], ['stone', 6.35029318], ['US ton', 907.18474]], def: ['kilogram', 'pound']},
+  Temperature: {units: [['Celsius', c => c, c => c], ['Fahrenheit', f => (f - 32) * 5 / 9, c => c * 9 / 5 + 32], ['Kelvin', k => k - 273.15, c => c + 273.15]], def: ['Celsius', 'Fahrenheit']},
+  Volume: {units: [['millilitre', .001], ['litre', 1], ['cubic metre', 1000], ['teaspoon (US)', .00492892159375], ['tablespoon (US)', .01478676478125], ['fluid ounce (US)', .0295735295625], ['cup (US)', .2365882365], ['pint (US)', .473176473], ['gallon (US)', 3.785411784], ['pint (UK)', .56826125], ['gallon (UK)', 4.54609]], def: ['litre', 'gallon (US)']},
+  Area: {units: [['square metre', 1], ['square kilometre', 1e6], ['hectare', 1e4], ['square foot', .09290304], ['square yard', .83612736], ['acre', 4046.8564224], ['square mile', 2589988.110336]], def: ['square metre', 'square foot']},
+  Speed: {units: [['metres/second', 1], ['km/hour', 1 / 3.6], ['miles/hour', .44704], ['knot', 1852 / 3600], ['feet/second', .3048], ['speed of sound (sea level)', 343], ['speed of light', 299792458]], def: ['km/hour', 'miles/hour']},
+  Time: {units: [['millisecond', .001], ['second', 1], ['minute', 60], ['hour', 3600], ['day', 86400], ['week', 604800], ['month (avg)', 2629746], ['year (avg)', 31556952]], def: ['hour', 'minute']},
+  Data: {units: [['bit', .125], ['byte', 1], ['kilobyte (1000)', 1e3], ['kibibyte (1024)', 1024], ['megabyte', 1e6], ['mebibyte', 1048576], ['gigabyte', 1e9], ['gibibyte', 1073741824], ['terabyte', 1e12], ['tebibyte', 1099511627776]], def: ['gigabyte', 'gibibyte']},
+  'Data rate': {units: [['bits/second', 1], ['kilobits/s', 1e3], ['megabits/s', 1e6], ['gigabits/s', 1e9], ['bytes/second', 8], ['kilobytes/s', 8e3], ['megabytes/s', 8e6]], def: ['megabits/s', 'megabytes/s']},
+  Energy: {units: [['joule', 1], ['kilojoule', 1000], ['calorie', 4.184], ['kilocalorie (food)', 4184], ['watt-hour', 3600], ['kilowatt-hour', 3.6e6], ['BTU', 1055.05585262], ['electronvolt', 1.602176634e-19]], def: ['kilocalorie (food)', 'kilojoule']},
+  Pressure: {units: [['pascal', 1], ['kilopascal', 1000], ['bar', 1e5], ['atmosphere', 101325], ['psi', 6894.757293168], ['mmHg', 133.322387415]], def: ['bar', 'psi']},
+  Angle: {units: [['degree', Math.PI / 180], ['radian', 1], ['gradian', Math.PI / 200], ['turn', 2 * Math.PI], ['arcminute', Math.PI / 10800], ['arcsecond', Math.PI / 648000]], def: ['degree', 'radian']},
+  'Fuel economy': {units: [['km/litre', k => k, k => k], ['litres/100 km', l => 100 / l, k => 100 / k], ['miles/gallon (US)', m => m * 1.609344 / 3.785411784, k => k * 3.785411784 / 1.609344], ['miles/gallon (UK)', m => m * 1.609344 / 4.54609, k => k * 4.54609 / 1.609344]], def: ['litres/100 km', 'miles/gallon (US)']},
+};
+let cat = 'Length';
+const unit = name => CATS[cat].units.find(u => u[0] === name);
+const toBase = (u, v) => typeof u[1] === 'function' ? u[1](v) : v * u[1];
+const fromBase = (u, v) => typeof u[1] === 'function' ? u[2](v) : v / u[1];
+function fmt(v) {
+  if (!isFinite(v)) return '—';
+  if (v === 0) return '0';
+  const a = Math.abs(v);
+  if (a >= 1e15 || a < 1e-6) return v.toExponential(6).replace(/\.?0+e/, 'e');
+  return parseFloat(v.toPrecision(10)).toLocaleString(undefined, {maximumFractionDigits: 10});
+}
+function parse(s) {
+  s = s.replace(/,/g, '').trim();
+  if (!s) return NaN;
+  if (!/^[\d\s.+\-*/()eE]+$/.test(s)) return NaN;
+  try { const v = Function('"use strict";return (' + s + ')')(); return typeof v === 'number' ? v : NaN; } catch (e) { return NaN; }
+}
+
+const catsEl = $('cats');
+for (const c of Object.keys(CATS)) {
+  const b = document.createElement('button'); b.textContent = c; b.onclick = () => setCat(c); catsEl.appendChild(b);
+}
+function fillSelect(sel, pick) {
+  sel.innerHTML = '';
+  for (const [n] of CATS[cat].units) { const o = document.createElement('option'); o.value = o.textContent = n; sel.appendChild(o); }
+  sel.value = pick;
+}
+function setCat(c) {
+  cat = c;
+  [...catsEl.children].forEach(b => b.classList.toggle('on', b.textContent === c));
+  fillSelect($('ua'), CATS[c].def[0]); fillSelect($('ub'), CATS[c].def[1]);
+  $('a').value = c === 'Temperature' ? '20' : '1';
+  calc('a');
+}
+function calc(from) {
+  const src = from === 'a' ? ['a', 'ua', 'ub', 'b'] : ['b', 'ub', 'ua', 'a'];
+  const v = parse($(src[0]).value), uFrom = unit($(src[1]).value), uTo = unit($(src[2]).value);
+  const base = toBase(uFrom, v);
+  $(src[3]).value = isNaN(v) ? '' : fmt(fromBase(uTo, base)).replace(/,/g, '');
+  $('formula').textContent = isNaN(v) ? '' : `${fmt(v)} ${uFrom[0]} = ${fmt(fromBase(uTo, base))} ${uTo[0]}`;
+  const tbl = $('all'); tbl.innerHTML = '';
+  if (isNaN(v)) return;
+  for (const u of CATS[cat].units) {
+    const tr = document.createElement('tr'); if (u[0] === uTo[0]) tr.className = 'sel';
+    tr.innerHTML = `<td>${u[0]}</td><td>${fmt(fromBase(u, base))}</td>`;
+    tr.onclick = () => { $(src[2]).value = u[0]; calc(from); };
+    tbl.appendChild(tr);
+  }
+}
+$('a').addEventListener('input', () => calc('a'));
+$('b').addEventListener('input', () => calc('b'));
+$('ua').addEventListener('change', () => calc('a'));
+$('ub').addEventListener('change', () => calc('a'));
+$('flip').onclick = () => { const t = $('ua').value; $('ua').value = $('ub').value; $('ub').value = t; $('a').value = $('b').value || $('a').value; calc('a'); };
+setCat('Length');
+</script>
+</body>
+</html>
